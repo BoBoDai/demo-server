@@ -1,0 +1,62 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to server
+        uses: appleboy/scp-action@v0.1.1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          source: "main.py,requirements.txt,models/"
+          target: "/opt/demo-server/"
+          strip_components: 0
+
+      - name: Execute deployment commands
+        uses: appleboy/ssh-action@v0.1.1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          timeout: 10m
+          command_timeout: 10m
+          script: |
+            set -e
+
+            echo "Step 1: Setup venv and install dependencies"
+            cd /opt/demo-server
+            python3 -m venv venv 2>/dev/null || true
+            ./venv/bin/pip install --quiet -r requirements.txt
+
+            PID_FILE=/opt/demo-server/app.pid
+
+            echo "Step 2: Killing old demo-server process"
+            if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+              kill "$(cat "$PID_FILE")"
+              sleep 2
+            fi
+
+            echo "Step 3: Starting demo-server"
+            nohup /opt/demo-server/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8888 --workers 1 > /opt/demo-server/app.log 2>&1 &
+            echo $! > "$PID_FILE"
+            sleep 3
+
+            echo "Step 4: Checking demo-server"
+            curl -s http://127.0.0.1:8888/api/health && echo " (OK)" || echo " (Failed)"
+            echo "Step 5: Completed"
